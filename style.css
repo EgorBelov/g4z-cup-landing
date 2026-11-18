@@ -510,7 +510,7 @@ h1 em {
   transition: opacity 0.7s ease;
   pointer-events: none;
 }
-.backdrop .background-video.is-active {
+.backdrop .background-video.is-active.is-ready {
   opacity: 1;
 }
 @media (prefers-reduced-motion: reduce) {

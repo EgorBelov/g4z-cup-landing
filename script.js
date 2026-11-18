@@ -6,6 +6,52 @@ let userPaused = false;
 let switching = false;
 const canPlay = () => !userPaused && !document.hidden && !reducedMotion.matches;
 const currentVideo = () => videos[activeIndex];
+
+// Keep the poster (or outgoing clip) visible until a decoded frame can be shown.
+function waitForVideoFrame(video) {
+  return new Promise((resolve, reject) => {
+    let videoFrame;
+    let animationFrame;
+    const cleanup = () => {
+      if (videoFrame !== undefined)
+        video.cancelVideoFrameCallback?.(videoFrame);
+      if (animationFrame !== undefined)
+        window.cancelAnimationFrame(animationFrame);
+      video.removeEventListener("loadeddata", checkFrame);
+      ["error", "pause", "emptied"].forEach((event) =>
+        video.removeEventListener(event, fail),
+      );
+    };
+    const finish = () => {
+      cleanup();
+      resolve();
+    };
+    const fail = () => {
+      cleanup();
+      reject(new Error("Video playback stopped before its first frame."));
+    };
+    const checkFrame = () => {
+      if (video.readyState >= 2 && animationFrame === undefined)
+        animationFrame = window.requestAnimationFrame(finish);
+    };
+
+    if (video.paused || video.error) {
+      fail();
+      return;
+    }
+    ["error", "pause", "emptied"].forEach((event) =>
+      video.addEventListener(event, fail),
+    );
+    if (typeof video.requestVideoFrameCallback === "function") {
+      videoFrame = video.requestVideoFrameCallback(finish);
+    } else {
+      // Older browsers expose decoded-frame availability through readyState.
+      video.addEventListener("loadeddata", checkFrame);
+      checkFrame();
+    }
+  });
+}
+
 function syncControl() {
   const paused = userPaused || currentVideo().paused;
   control.setAttribute(
@@ -20,12 +66,15 @@ function syncControl() {
 }
 async function resume() {
   if (!canPlay()) return;
+  const video = currentVideo();
   try {
-    await currentVideo().play();
+    await video.play();
+    await waitForVideoFrame(video);
+    if (canPlay() && video === currentVideo()) video.classList.add("is-ready");
   } catch {
     /* Keep the poster when playback is blocked. */
   }
-  if (!canPlay()) currentVideo().pause();
+  if (!canPlay()) video.pause();
   syncControl();
 }
 async function advance() {
@@ -35,14 +84,17 @@ async function advance() {
   const nextIndex = (activeIndex + 1) % videos.length;
   const next = videos[nextIndex];
   try {
+    next.classList.remove("is-ready");
     next.currentTime = 0;
     await next.play();
+    await waitForVideoFrame(next);
     if (!canPlay()) {
       next.pause();
       switching = false;
       return;
     }
     activeIndex = nextIndex;
+    next.classList.add("is-ready");
     next.classList.add("is-active");
     previous.classList.remove("is-active");
     syncControl();
@@ -52,9 +104,10 @@ async function advance() {
     }, 750);
   } catch {
     next.pause();
+    switching = false;
+    if (!canPlay()) return;
     // If one clip cannot load, retain a working background rather than a blank screen.
     previous.currentTime = 0;
-    switching = false;
     resume();
   }
 }
